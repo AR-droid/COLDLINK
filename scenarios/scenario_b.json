@@ -1,0 +1,99 @@
+{
+ "name": "B",
+ "description": "New night burglary at Northgate: size-10 zigzag sole only",
+ "case": {
+  "id": "SRFL-2026-0902",
+  "year": 2026,
+  "date": "2026-10-15T01:50:00",
+  "station": "ST-NG",
+  "type": "burglary",
+  "entry_point": "rear first-floor window",
+  "hour": 1,
+  "location": "LOC-NG-02",
+  "status": "open",
+  "sealed": false
+ },
+ "exhibits": [
+  {
+   "id": "EX-90011",
+   "type": "footwear",
+   "collected": "2026-10-15T08:00:00",
+   "pattern": "zigzag",
+   "size": 10,
+   "subtype": "a",
+   "wear_code": "W-17"
+  }
+ ],
+ "findings": [
+  {
+   "id": "F-90011",
+   "about": "EX-90011",
+   "about_kind": "Exhibit",
+   "date": "2026-10-15T15:00:00",
+   "examiner": "EXM-08",
+   "method": "M-FW",
+   "sop": "SOP-FW-3",
+   "kind": "examination",
+   "text": "zigzag sole pattern, size 10, sub-type a, wear W-17"
+  }
+ ],
+ "custody": [
+  {
+   "id": "CE-90011-1",
+   "exhibit": "EX-90011",
+   "seq": 1,
+   "action": "collected",
+   "place": "scene",
+   "ts": "2026-10-15T08:00:00"
+  },
+  {
+   "id": "CE-90011-2",
+   "exhibit": "EX-90011",
+   "seq": 2,
+   "action": "sealed",
+   "place": "scene",
+   "ts": "2026-10-15T10:00:00"
+  },
+  {
+   "id": "CE-90011-3",
+   "exhibit": "EX-90011",
+   "seq": 3,
+   "action": "stored",
+   "place": "station store",
+   "ts": "2026-10-15T18:00:00"
+  },
+  {
+   "id": "CE-90011-4",
+   "exhibit": "EX-90011",
+   "seq": 4,
+   "action": "dispatched",
+   "place": "station store",
+   "ts": "2026-10-16T14:00:00"
+  },
+  {
+   "id": "CE-90011-5",
+   "exhibit": "EX-90011",
+   "seq": 5,
+   "action": "received",
+   "place": "lab intake",
+   "ts": "2026-10-16T18:00:00"
+  },
+  {
+   "id": "CE-90011-6",
+   "exhibit": "EX-90011",
+   "seq": 6,
+   "action": "examined",
+   "place": "lab",
+   "ts": "2026-10-17T12:00:00"
+  }
+ ],
+ "statements": [
+  {
+   "id": "STM-90011",
+   "case": "SRFL-2026-0902",
+   "date": "2026-10-15T01:50:00",
+   "witness": "W-9011",
+   "text": "Neighbour heard a window go at about 2 AM; no vehicle seen."
+  }
+ ]
+}
