@@ -234,6 +234,78 @@ def claude_loop(case_id: str, tb: Toolbox, max_turns: int = 30) -> dict:
     return {"report": "Stopped: turn limit reached.", "series": None}
 
 
+# ---------------------------------------------------------------------- groq
+
+def _openai_tools() -> list[dict]:
+    """Same tool specs as Claude mode, reshaped for OpenAI-style function calling."""
+    specs = [spec(f) for f in READ_TOOLS + ACTION_TOOLS] + [FINISH]
+    return [{"type": "function", "function": {"name": s["name"], "description": s["description"],
+                                               "parameters": s["input_schema"]}} for s in specs]
+
+
+def groq_loop(case_id: str, tb: Toolbox, max_turns: int = 50,
+              model: str = "openai/gpt-oss-120b") -> dict:
+    """Same agent loop as claude_loop, driven by Groq's OpenAI-compatible API
+    instead of Anthropic's, since that is the live key available."""
+    import os as _os
+    import re as _re
+    import time as _time
+    import urllib.error
+    import urllib.request
+
+    api_key = _os.environ["GROQ_API_KEY"]
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    tools = _openai_tools()
+    messages = [{"role": "system", "content": SYSTEM},
+                {"role": "user", "content": f"New case {case_id} has been loaded. Investigate and act."}]
+    for _ in range(max_turns):
+        body = json.dumps({"model": model, "messages": messages, "tools": tools, "tool_choice": "auto",
+                            "max_tokens": 4000}).encode()
+        req = urllib.request.Request(url, data=body, method="POST", headers={
+            "Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+            "User-Agent": "curl/8.7.1"})
+        try:
+            with urllib.request.urlopen(req) as resp:
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            err = e.read().decode()
+            if e.code == 429:
+                m = _re.search(r"try again in ([\d.]+)s", err)
+                _time.sleep(float(m.group(1)) + 1 if m else 15)
+                continue
+            if e.code == 400 and "tool_use_failed" in err:
+                # Groq rejects a malformed tool call before it reaches us; recover by
+                # replaying the model's bad call and its validator message as a normal
+                # tool error, so the model can see the mistake and retry.
+                try:
+                    detail = json.loads(err)["error"]
+                    bad = json.loads(detail["failed_generation"])
+                except Exception:
+                    return {"report": f"Groq API error {e.code}: {err[:500]}", "series": None}
+                cid = f"retry-{tb.step}"
+                messages.append({"role": "assistant", "content": None,
+                                  "tool_calls": [{"id": cid, "type": "function",
+                                                   "function": {"name": bad["name"],
+                                                                "arguments": json.dumps(bad["arguments"])}}]})
+                messages.append({"role": "tool", "tool_call_id": cid,
+                                  "content": json.dumps({"error": detail["message"]})})
+                continue
+            return {"report": f"Groq API error {e.code}: {err[:500]}", "series": None}
+        msg = data["choices"][0]["message"]
+        messages.append(msg)
+        calls = msg.get("tool_calls") or []
+        if not calls:
+            return {"report": msg.get("content") or "Stopped: model returned no tool calls.", "series": None}
+        for c in calls:
+            name = c["function"]["name"]
+            args = json.loads(c["function"]["arguments"] or "{}")
+            if name == "finish":
+                return {"report": args["report"], "series": args.get("series")}
+            out = tb.call(name, **args)
+            messages.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(out, default=str)[:20000]})
+    return {"report": "Stopped: turn limit reached.", "series": None}
+
+
 # --------------------------------------------------------------------- main
 
 def run(scenario_path: str, mode: str = "auto", lab: str = DEFAULT_LAB, ingest: bool = True) -> dict:
@@ -243,11 +315,15 @@ def run(scenario_path: str, mode: str = "auto", lab: str = DEFAULT_LAB, ingest: 
     if ingest and not g.query("MATCH (c:Case {id: $id}) RETURN c", {"id": case_id}).result_set:
         load_case(g, sc)
     if mode == "auto":
-        mode = "claude" if os.environ.get("ANTHROPIC_API_KEY") else "offline"
+        mode = ("claude" if os.environ.get("ANTHROPIC_API_KEY")
+                 else "groq" if os.environ.get("GROQ_API_KEY") else "offline")
     run_id = T.start_run("lead", f"investigate {case_id}", lab=lab)
     tb = Toolbox(run_id, lab)
     if mode == "claude":
         out = claude_loop(case_id, tb)
+        report = out["report"]
+    elif mode == "groq":
+        out = groq_loop(case_id, tb)
         report = out["report"]
     else:
         out = offline_policy(case_id, tb)
@@ -263,7 +339,7 @@ def run(scenario_path: str, mode: str = "auto", lab: str = DEFAULT_LAB, ingest: 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("scenario")
-    ap.add_argument("--mode", choices=["auto", "claude", "offline"], default="auto")
+    ap.add_argument("--mode", choices=["auto", "claude", "groq", "offline"], default="auto")
     ap.add_argument("--lab", default=DEFAULT_LAB)
     a = ap.parse_args()
     r = run(a.scenario, a.mode, a.lab)
