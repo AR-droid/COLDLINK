@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: coldlink
+    runtime: docker
+    dockerfilePath: ./Dockerfile.deploy
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: FALKORDB_HOST
+        value: localhost
