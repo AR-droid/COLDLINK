@@ -5,4 +5,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY coldlink coldlink
 COPY scenarios scenarios
 ENV FALKORDB_HOST=falkordb
-CMD ["sh", "-c", "python -m coldlink.generate && python -m coldlink.load && python -m coldlink.demo"]
+CMD ["sh", "-c", "python -m coldlink.generate && python -m coldlink.load && python -m coldlink.demo --mode offline"]
