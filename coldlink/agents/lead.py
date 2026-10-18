@@ -313,12 +313,10 @@ def groq_loop(case_id: str, tb: Toolbox, max_turns: int = 50,
 
 # --------------------------------------------------------------------- main
 
-def run(scenario_path: str, mode: str = "auto", lab: str = DEFAULT_LAB, ingest: bool = True) -> dict:
-    sc = json.load(open(scenario_path))
-    case_id = sc["case"]["id"]
-    g = get_graph(lab)
-    if ingest and not g.query("MATCH (c:Case {id: $id}) RETURN c", {"id": case_id}).result_set:
-        load_case(g, sc)
+def investigate_case(case_id: str, mode: str = "auto", lab: str = DEFAULT_LAB) -> dict:
+    """Run the Lead agent on a case already present in the graph (ingestion
+    is the caller's job -- see run() for the scenario-file path, or ingest a
+    case dict directly with load.load_case)."""
     if mode == "auto":
         mode = ("claude" if os.environ.get("ANTHROPIC_API_KEY")
                  else "groq" if os.environ.get("GROQ_API_KEY") else "offline")
@@ -339,6 +337,15 @@ def run(scenario_path: str, mode: str = "auto", lab: str = DEFAULT_LAB, ingest: 
     Path(f"runs/{run_id}.trace.json").write_text(json.dumps(tb.trace, indent=1, default=str))
     return {"run_id": run_id, "mode": mode, "case_id": case_id, "report": report, "result": out,
             "actions": T.action_log(run_id, lab=lab), "steps": tb.step, "trace": tb.trace}
+
+
+def run(scenario_path: str, mode: str = "auto", lab: str = DEFAULT_LAB, ingest: bool = True) -> dict:
+    sc = json.load(open(scenario_path))
+    case_id = sc["case"]["id"]
+    g = get_graph(lab)
+    if ingest and not g.query("MATCH (c:Case {id: $id}) RETURN c", {"id": case_id}).result_set:
+        load_case(g, sc)
+    return investigate_case(case_id, mode, lab)
 
 
 def main():

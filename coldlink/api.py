@@ -9,15 +9,20 @@ Usage: uvicorn coldlink.api:app --host 0.0.0.0 --port 8080
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from . import tools as T
 from .agents import lead
 from .db import DEFAULT_LAB, get_graph, rows
 from .load import load as load_graph
+from .load import load_case
 from .scenarios import complete_retest, write_all
 
 app = FastAPI(title="Coldlink API")
@@ -208,3 +213,110 @@ def demo_run(mode: str = "offline"):
         "scenario_a": a,
         "scenario_b": b,
     }
+
+
+# ------------------------------------------------------------- user-submitted cases
+
+TM_CLASSES = ["pry-bar", "screwdriver", "chisel", "bolt-cutter", "wrecking-bar", "tyre-lever"]
+TM_PROFILES = ["flat-chamfered", "flat-square", "rounded", "serrated", "bevelled"]
+FW_PATTERNS = ["zigzag", "hexagonal", "bar", "circular", "wavy", "block", "chevron", "lug",
+               "herringbone", "diamond", "star", "target", "multi-bar", "dimple"]
+CASE_TYPES = ["burglary", "theft", "criminal_damage", "vehicle_crime", "robbery", "assault"]
+ENTRY_POINTS = ["rear first-floor window", "rear ground-floor window", "rear ground-floor door",
+                "front door", "side door", "garage door", "front ground-floor window"]
+
+
+@app.get("/reference")
+def reference():
+    """Vocabulary for the case-upload form: real stations/locations from the
+    loaded graph, plus the exhibit property choices the generator itself uses
+    (so a user-built case speaks the same language as the planted data)."""
+    g = get_graph(DEFAULT_LAB)
+    stations = rows(g, "MATCH (s:Station) RETURN s.id AS id, s.name AS name ORDER BY s.name", read_only=True)
+    locations = rows(g, "MATCH (l:Location) RETURN l.id AS id, l.station AS station ORDER BY l.id", read_only=True)
+    return {
+        "stations": stations,
+        "locations": locations,
+        "case_types": CASE_TYPES,
+        "entry_points": ENTRY_POINTS,
+        "exhibit_types": {
+            "toolmark": {"tm_class": TM_CLASSES, "edge_profile": TM_PROFILES},
+            "footwear": {"pattern": FW_PATTERNS, "subtype": ["a", "b", "c"]},
+            "vehicle": {},
+        },
+    }
+
+
+class ExhibitIn(BaseModel):
+    type: Literal["toolmark", "footwear", "vehicle"]
+    tm_class: str | None = None
+    width_mm: float | None = None
+    edge_profile: str | None = None
+    pattern: str | None = None
+    size: int | None = None
+    subtype: str | None = None
+    wear_code: str | None = None
+    make_model: str | None = None
+    colour: str | None = None
+    plate_partial: str | None = None
+
+
+class CaseIn(BaseModel):
+    station: str
+    location: str | None = None
+    date: str
+    type: str
+    entry_point: str | None = None
+    exhibits: list[ExhibitIn]
+
+
+@app.post("/cases/upload")
+def upload_case(body: CaseIn, mode: str = "offline"):
+    """Ingest a real, user-submitted case and let the Lead agent investigate
+    it live -- same tools, same graph, same Toolbox trace as the two planted
+    scenarios, just with no authored ground truth to check against."""
+    if mode not in ("offline", "claude", "groq"):
+        raise HTTPException(400, "mode must be offline, claude or groq")
+    if not body.exhibits:
+        raise HTTPException(400, "at least one exhibit is required")
+    try:
+        when = datetime.fromisoformat(body.date)
+    except ValueError:
+        raise HTTPException(400, "date must be ISO 8601, e.g. 2026-10-18T02:30:00")
+
+    g = get_graph(DEFAULT_LAB)
+    station_row = rows(g, "MATCH (s:Station {id: $id}) RETURN s.id AS id", {"id": body.station}, read_only=True)
+    if not station_row:
+        raise HTTPException(404, f"unknown station {body.station}")
+    location = body.location
+    if location:
+        loc_row = rows(g, "MATCH (l:Location {id: $id, station: $s}) RETURN l.id",
+                        {"id": location, "s": body.station}, read_only=True)
+        if not loc_row:
+            raise HTTPException(404, f"unknown location {location} for station {body.station}")
+    else:
+        loc_row = rows(g, "MATCH (l:Location {station: $s}) RETURN l.id AS id LIMIT 1",
+                        {"s": body.station}, read_only=True)
+        if not loc_row:
+            raise HTTPException(404, f"station {body.station} has no locations")
+        location = loc_row[0]["id"]
+
+    case_id = f"SRFL-{when.year}-U{uuid.uuid4().hex[:4].upper()}"
+    case = {"id": case_id, "year": when.year, "date": body.date, "station": body.station,
+            "type": body.type, "entry_point": body.entry_point, "hour": when.hour,
+            "location": location, "status": "open", "sealed": False, "planted": None}
+    exhibits = []
+    for ex in body.exhibits:
+        e = {"id": f"EX-U{uuid.uuid4().hex[:6].upper()}", "case": case_id, "type": ex.type,
+             "collected": body.date}
+        if ex.type == "toolmark":
+            e.update(tm_class=ex.tm_class, width_mm=ex.width_mm, edge_profile=ex.edge_profile)
+        elif ex.type == "footwear":
+            e.update(pattern=ex.pattern, size=ex.size, subtype=ex.subtype, wear_code=ex.wear_code)
+        elif ex.type == "vehicle":
+            e.update(make_model=ex.make_model, colour=ex.colour, plate_partial=ex.plate_partial)
+        exhibits.append(e)
+
+    load_case(g, {"case": case, "exhibits": exhibits})
+    result = lead.investigate_case(case_id, mode, DEFAULT_LAB)
+    return {"mode": mode, "case_id": case_id, **result}

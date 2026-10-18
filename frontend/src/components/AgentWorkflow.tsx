@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { marked } from "marked";
-import { api, type InvestigateResult, type TraceStep } from "../api";
+import type { InvestigateResult, TraceStep } from "../api";
 
 const TOOL_LABEL: Record<string, string> = {
   find_similar_exhibits: "Find Similar Exhibits",
@@ -21,7 +21,15 @@ const TOOL_LABEL: Record<string, string> = {
   notify_officer: "Notify Officer",
 };
 
-export default function AgentWorkflow({ caseKey, onBack }: { caseKey: string; onBack: () => void }) {
+export default function AgentWorkflow({
+  runner,
+  onBack,
+  autoRun = false,
+}: {
+  runner: () => Promise<InvestigateResult>;
+  onBack: () => void;
+  autoRun?: boolean;
+}) {
   const [result, setResult] = useState<InvestigateResult | null>(null);
   const [running, setRunning] = useState(false);
   const [revealed, setRevealed] = useState(0);
@@ -33,7 +41,7 @@ export default function AgentWorkflow({ caseKey, onBack }: { caseKey: string; on
     setResult(null);
     setRevealed(0);
     try {
-      const r = await api.investigate(caseKey);
+      const r = await runner();
       setResult(r);
     } catch (e) {
       setErr(String(e));
@@ -41,6 +49,11 @@ export default function AgentWorkflow({ caseKey, onBack }: { caseKey: string; on
       setRunning(false);
     }
   }
+
+  useEffect(() => {
+    if (autoRun) void run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Reveal trace steps one at a time once the (real) result has arrived, so the
   // pipeline reads as a sequence rather than dumping everything at once.
@@ -74,9 +87,10 @@ export default function AgentWorkflow({ caseKey, onBack }: { caseKey: string; on
 
       {result && (
         <>
-          <div className={`score-banner ${result.passed === result.total ? "ok" : "warn"}`}>
-            {result.case_id} &middot; {result.passed}/{result.total} outcome checks passed &middot; run{" "}
-            {result.run_id}
+          <div className={`score-banner ${result.checks === undefined || result.passed === result.total ? "ok" : "warn"}`}>
+            {result.case_id}
+            {result.checks !== undefined && ` · ${result.passed}/${result.total} outcome checks passed`}
+            {" "}&middot; run {result.run_id}
           </div>
 
           <section className="pipeline">
@@ -88,18 +102,20 @@ export default function AgentWorkflow({ caseKey, onBack }: { caseKey: string; on
 
           {revealed >= result.trace.length && (
             <>
-              <section className="panel">
-                <div className="panel-head"><span>Outcome Checks</span></div>
-                <div className="checks">
-                  {result.checks.map((c, i) => (
-                    <div key={i} className={`check ${c.pass ? "pass" : "fail"}`}>
-                      <span className="dot" />
-                      <span>{c.label}</span>
-                      {c.detail && <span className="check-detail">{c.detail}</span>}
-                    </div>
-                  ))}
-                </div>
-              </section>
+              {result.checks && (
+                <section className="panel">
+                  <div className="panel-head"><span>Outcome Checks</span></div>
+                  <div className="checks">
+                    {result.checks.map((c, i) => (
+                      <div key={i} className={`check ${c.pass ? "pass" : "fail"}`}>
+                        <span className="dot" />
+                        <span>{c.label}</span>
+                        {c.detail && <span className="check-detail">{c.detail}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               {result.actions.length > 0 && (
                 <section className="panel">

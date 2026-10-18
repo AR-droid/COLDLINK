@@ -4,11 +4,25 @@ import "./App.css";
 import Dashboard from "./components/Dashboard";
 import NetworkView from "./components/NetworkView";
 import AgentWorkflow from "./components/AgentWorkflow";
+import NewCase from "./components/NewCase";
+import { api, type CaseIn, type InvestigateResult } from "./api";
 
-type View = { page: "dashboard" } | { page: "network" } | { page: "workflow"; key: string };
+type View =
+  | { page: "dashboard" }
+  | { page: "network" }
+  | { page: "newcase" }
+  | { page: "workflow"; runner: () => Promise<InvestigateResult>; autoRun: boolean };
 
 export default function App() {
   const [view, setView] = useState<View>({ page: "dashboard" });
+
+  function investigateScenario(key: string) {
+    setView({ page: "workflow", runner: () => api.investigate(key), autoRun: false });
+  }
+
+  function investigateUpload(body: CaseIn) {
+    setView({ page: "workflow", runner: () => api.uploadCase(body), autoRun: true });
+  }
 
   return (
     <div className="shell">
@@ -24,6 +38,12 @@ export default function App() {
             Case Dashboard
           </button>
           <button
+            className={view.page === "newcase" ? "navlink active" : "navlink"}
+            onClick={() => setView({ page: "newcase" })}
+          >
+            New Case
+          </button>
+          <button
             className={view.page === "network" ? "navlink active" : "navlink"}
             onClick={() => setView({ page: "network" })}
           >
@@ -36,12 +56,15 @@ export default function App() {
       </nav>
 
       <main className="main">
-        {view.page === "dashboard" && (
-          <Dashboard onInvestigate={(key) => setView({ page: "workflow", key })} />
-        )}
+        {view.page === "dashboard" && <Dashboard onInvestigate={investigateScenario} />}
         {view.page === "network" && <NetworkView />}
+        {view.page === "newcase" && <NewCase onSubmit={investigateUpload} />}
         {view.page === "workflow" && (
-          <AgentWorkflow caseKey={view.key} onBack={() => setView({ page: "dashboard" })} />
+          <AgentWorkflow
+            runner={view.runner}
+            autoRun={view.autoRun}
+            onBack={() => setView({ page: "dashboard" })}
+          />
         )}
       </main>
 

@@ -34,14 +34,46 @@ export type InvestigateResult = {
   report: string;
   actions: Action[];
   trace: TraceStep[];
-  checks: Check[];
-  passed: number;
-  total: number;
+  checks?: Check[];
+  passed?: number;
+  total?: number;
   retest?: unknown[];
 };
 export type GraphNode = { id: string; status: string; date: string; station: string };
 export type GraphEdge = { a: string; b: string; score: number; status: string };
 export type GraphView = { nodes: GraphNode[]; edges: GraphEdge[] };
+export type Reference = {
+  stations: { id: string; name: string }[];
+  locations: { id: string; station: string }[];
+  case_types: string[];
+  entry_points: string[];
+  exhibit_types: {
+    toolmark: { tm_class: string[]; edge_profile: string[] };
+    footwear: { pattern: string[]; subtype: string[] };
+    vehicle: Record<string, never>;
+  };
+};
+export type ExhibitIn = {
+  type: "toolmark" | "footwear" | "vehicle";
+  tm_class?: string;
+  width_mm?: number;
+  edge_profile?: string;
+  pattern?: string;
+  size?: number;
+  subtype?: string;
+  wear_code?: string;
+  make_model?: string;
+  colour?: string;
+  plate_partial?: string;
+};
+export type CaseIn = {
+  station: string;
+  location?: string;
+  date: string;
+  type: string;
+  entry_point?: string;
+  exhibits: ExhibitIn[];
+};
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${API}${path}`);
@@ -49,8 +81,12 @@ async function get<T>(path: string): Promise<T> {
   return res.json();
 }
 
-async function post<T>(path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`, { method: "POST" });
+async function post<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
   if (!res.ok) throw new Error(`${path} -> HTTP ${res.status}: ${await res.text()}`);
   return res.json();
 }
@@ -64,4 +100,6 @@ export const api = {
   series: (caseId: string) => get<GraphView>(`/graph/series/${caseId}`),
   investigate: (key: string, mode = "offline") => post<InvestigateResult>(`/investigate/${key}?mode=${mode}`),
   reset: () => post<{ status: string }>("/demo/reset"),
+  reference: () => get<Reference>("/reference"),
+  uploadCase: (body: CaseIn, mode = "offline") => post<InvestigateResult>(`/cases/upload?mode=${mode}`, body),
 };
