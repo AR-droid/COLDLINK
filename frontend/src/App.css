@@ -272,6 +272,8 @@
 }
 .network-controls button.ghost { background: transparent; border: 1px solid var(--border-dark); color: var(--border); }
 
+.network-canvas-wrap { position: relative; }
+
 .network-canvas {
   height: 520px;
   background: var(--panel-dark);
@@ -279,7 +281,36 @@
   border-radius: 6px;
 }
 
-.network-meta { color: var(--border); font-size: 12px; margin-top: 10px; }
+.network-overlay {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  max-width: 420px;
+  background: rgba(25, 20, 12, 0.88);
+  border: 1px solid var(--border-dark);
+  border-radius: 6px;
+  padding: 10px 14px;
+  pointer-events: none;
+}
+
+.network-overlay-title {
+  font-family: var(--f-display);
+  font-size: 13px;
+  color: var(--paper);
+  margin-bottom: 4px;
+}
+
+.network-overlay-sub {
+  font-size: 11px;
+  color: var(--border);
+  line-height: 1.5;
+}
+
+.network-overlay-legend {
+  font-size: 11px;
+  color: var(--border);
+  margin-top: 6px;
+}
 
 /* ---------- agent workflow ---------- */
 

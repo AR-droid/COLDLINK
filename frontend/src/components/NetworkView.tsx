@@ -14,6 +14,7 @@ export default function NetworkView() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [view, setView] = useState<GraphView | null>(null);
+  const [shownFor, setShownFor] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | null>(null);
 
@@ -41,6 +42,7 @@ export default function NetworkView() {
     try {
       const data = id ? await api.series(id) : await api.overview(60);
       setView(data);
+      setShownFor(id || null);
       if (id && data.nodes.length === 0) setErr(`No active series found for ${id} yet.`);
     } catch (e) {
       setErr(String(e));
@@ -68,9 +70,8 @@ export default function NetworkView() {
         id: i,
         from: e.a,
         to: e.b,
-        label: dense ? undefined : e.score.toFixed(2),
-        color: { color: "#8a7b50", highlight: "#a3262c", opacity: dense ? 0.5 : 0.9 },
-        font: { color: "#d8caa0", size: 11, face: "Courier Prime", strokeWidth: 0 },
+        title: `${e.a} ↔ ${e.b}\nlink score ${e.score.toFixed(2)} · ${e.status}`,
+        color: { color: "#8a7b50", highlight: "#a3262c", opacity: dense ? 0.5 : 0.85 },
         width: Math.max(1, e.score * 4),
       })),
     );
@@ -103,10 +104,8 @@ export default function NetworkView() {
       <div className="network-head">
         <h2>Evidence Network</h2>
         <p className="network-sub">
-          Cases as nodes, active <code>LINKED</code> edges between them, scored live by the agent's
-          tools. <span className="legend-dot" style={{ background: STATUS_COLOR.unsolved }} /> unsolved{" "}
-          <span className="legend-dot" style={{ background: STATUS_COLOR.open }} /> open{" "}
-          <span className="legend-dot" style={{ background: STATUS_COLOR.closed }} /> closed
+          Each node is a real case from the lab graph; each edge is an active link the agent's
+          tools scored between two cases. Pick any case id to see the series it belongs to.
         </p>
         <div className="network-controls">
           <input
@@ -124,13 +123,25 @@ export default function NetworkView() {
         </div>
         {err && <div className="network-err">{err}</div>}
       </div>
-      <div className="network-canvas" ref={containerRef} />
-      {view && (
-        <div className="network-meta">
-          {view.nodes.length} cases &middot; {view.edges.length} active links shown &middot; scroll to
-          zoom, drag to pan
-        </div>
-      )}
+      <div className="network-canvas-wrap">
+        <div className="network-canvas" ref={containerRef} />
+        {view && view.nodes.length > 0 && (
+          <div className="network-overlay">
+            <div className="network-overlay-title">
+              {shownFor ? `Case series around ${shownFor}` : "Sample of active case links"}
+            </div>
+            <div className="network-overlay-sub">
+              {view.nodes.length} cases &middot; {view.edges.length} <code>LINKED</code> edges &middot;
+              line thickness = link score &middot; hover an edge for its score
+            </div>
+            <div className="network-overlay-legend">
+              <span className="legend-dot" style={{ background: STATUS_COLOR.unsolved }} /> unsolved
+              <span className="legend-dot" style={{ background: STATUS_COLOR.open }} /> open
+              <span className="legend-dot" style={{ background: STATUS_COLOR.closed }} /> closed
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
