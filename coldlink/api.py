@@ -53,12 +53,69 @@ def graph_series(case_id: str):
     if not series:
         return {"nodes": [], "edges": []}
     g = get_graph(DEFAULT_LAB)
+    node_rows = rows(g, """
+        MATCH (c:Case) WHERE c.id IN $cases
+        OPTIONAL MATCH (c)-[:REPORTED_AT]->(s:Station)
+        RETURN c.id AS id, c.status AS status, c.date AS date, s.name AS station
+    """, {"cases": series["cases"]}, read_only=True)
     edges = rows(g, """
         MATCH (a:Case)-[l:LINKED]-(b:Case)
         WHERE a.id IN $cases AND b.id IN $cases AND id(a) < id(b) AND l.status IN ['proposed','accepted']
         RETURN a.id AS a, b.id AS b, l.score AS score, l.status AS status
     """, {"cases": series["cases"]}, read_only=True)
-    return {"nodes": series["cases"], "edges": edges}
+    return {"nodes": node_rows, "edges": edges}
+
+
+@app.get("/graph/overview")
+def graph_overview(limit: int = 60):
+    """A sample of real cases and the active links between them, for a
+    default network view before any single case is selected."""
+    g = get_graph(DEFAULT_LAB)
+    edges = rows(g, """
+        MATCH (a:Case)-[l:LINKED]-(b:Case)
+        WHERE id(a) < id(b) AND l.status IN ['proposed','accepted']
+        RETURN a.id AS a, b.id AS b, l.score AS score, l.status AS status
+        LIMIT $limit
+    """, {"limit": limit}, read_only=True)
+    ids = sorted({e["a"] for e in edges} | {e["b"] for e in edges})
+    if not ids:
+        return {"nodes": [], "edges": []}
+    node_rows = rows(g, """
+        MATCH (c:Case) WHERE c.id IN $ids
+        OPTIONAL MATCH (c)-[:REPORTED_AT]->(s:Station)
+        RETURN c.id AS id, c.status AS status, c.date AS date, s.name AS station
+    """, {"ids": ids}, read_only=True)
+    return {"nodes": node_rows, "edges": edges}
+
+
+@app.get("/cases")
+def list_cases(limit: int = 50, offset: int = 0):
+    """Real cases from the loaded lab graph, for the case dashboard."""
+    g = get_graph(DEFAULT_LAB)
+    total = rows(g, "MATCH (c:Case) RETURN count(c) AS n", read_only=True)[0]["n"]
+    case_rows = rows(g, """
+        MATCH (c:Case)
+        OPTIONAL MATCH (c)-[:REPORTED_AT]->(s:Station)
+        OPTIONAL MATCH (c)-[:HAS_EXHIBIT]->(e:Exhibit)
+        RETURN c.id AS id, c.date AS date, c.status AS status, c.type AS type, s.name AS station,
+               count(DISTINCT e) AS exhibits
+        ORDER BY c.id DESC SKIP $offset LIMIT $limit
+    """, {"offset": offset, "limit": limit}, read_only=True)
+    return {"total": total, "cases": case_rows}
+
+
+@app.get("/cases/investigable")
+def investigable_cases():
+    """The cases with a scenario file on disk: these are the ones that can
+    actually be handed to the Lead agent to investigate live."""
+    out = []
+    for p in sorted(Path("scenarios").glob("scenario_*.json")):
+        sc = json.load(open(p))
+        case = sc["case"]
+        out.append({"key": p.stem.removeprefix("scenario_"), "case_id": case["id"],
+                    "station": case.get("station"), "date": case.get("date"),
+                    "type": case.get("type"), "location": case.get("location")})
+    return {"cases": out}
 
 
 @app.post("/demo/reset")
@@ -70,52 +127,84 @@ def demo_reset():
     return {"status": "reloaded", **stats}
 
 
-@app.post("/demo/run")
-def demo_run(mode: str = "offline"):
-    """Replays the two-scenario planted story end to end (same as `python -m
-    coldlink.demo`) and returns the reports plus the 8 ground-truth checks.
-    Call /demo/reset first if this graph already carries a previous run's
-    writes (reopened decisions, held/disproved links)."""
+def _investigate_a(mode: str, data_path: Path, gt: dict) -> dict:
+    ra = lead.run("scenarios/scenario_a.json", mode)
+    series_a = set(T.series_candidates("SRFL-2026-0901")["series"]["cases"])
+    kinds = {x["kind"]: x for x in ra["actions"]}
+    results = [
+        check("all seven planted series cases found", set(gt["series"]) <= series_a,
+              f"{len(set(gt['series']) & series_a)}/7"),
+        check("decoy rejected", gt["decoy"] not in series_a),
+        check("2023 elimination reopened",
+              kinds.get("reopen_decision", {}).get("target") == gt["alibi_decision"]),
+        check("unaffected CAM-17 decision left standing",
+              all(x["target"] != gt["unaffected_cam17_decision"] for x in ra["actions"])),
+    ]
+    retests = [x["target"] for x in ra["actions"] if x["kind"] == "request_retest"]
+    results.append(check("ends in a re-test", bool(retests), ", ".join(retests)))
+    retest_log = [complete_retest(x, str(data_path)) for x in retests]
+    after = set(T.series_candidates("SRFL-2026-0901")["series"]["cases"])
+    results.append(check("false link disproved and excluded after re-test",
+                          gt["false_link_case"] in series_a and gt["false_link_case"] not in after))
+    return {"run_id": ra["run_id"], "case_id": ra["case_id"], "report": ra["report"],
+            "actions": ra["actions"], "trace": ra["trace"], "retest": retest_log,
+            "checks": results, "passed": sum(1 for r in results if r["pass"]), "total": len(results)}
+
+
+def _investigate_b(mode: str, gt: dict) -> dict:
+    rb = lead.run("scenarios/scenario_b.json", mode)
+    kb = [x["kind"] for x in rb["actions"]]
+    results = [
+        check("holds the link instead of re-testing",
+              "hold_link" in kb and "request_retest" not in kb, ", ".join(kb)),
+    ]
+    held = T.case_links("SRFL-2026-0902", include_inactive=True)["links"]
+    results.append(check("held link rests on the custody-gap exhibit's case",
+                          any(l["status"] == "held" for l in held)))
+    return {"run_id": rb["run_id"], "case_id": rb["case_id"], "report": rb["report"],
+            "actions": rb["actions"], "trace": rb["trace"],
+            "checks": results, "passed": sum(1 for r in results if r["pass"]), "total": len(results)}
+
+
+@app.post("/investigate/{key}")
+def investigate(key: str, mode: str = "offline"):
+    """Hand one real case to the Lead agent and let it investigate live: the
+    graph tool calls, their timing and the resulting actions all come from
+    this one run, not a canned transcript. key is "a" or "b" (the two cases
+    with a scenario file and known ground truth to check the result against);
+    call /demo/reset first to undo a previous run's writes."""
     if mode not in ("offline", "claude", "groq"):
         raise HTTPException(400, "mode must be offline, claude or groq")
     data_path = Path("data/srfl.json")
     if not data_path.exists():
         raise HTTPException(503, "graph not loaded yet")
     gt = json.load(open(data_path))["ground_truth"]
-    results = []
+    if key == "a":
+        return {"mode": mode, **_investigate_a(mode, data_path, gt)}
+    if key == "b":
+        return {"mode": mode, **_investigate_b(mode, gt)}
+    raise HTTPException(404, "unknown case key, use 'a' or 'b'")
 
-    ra = lead.run("scenarios/scenario_a.json", mode)
-    series_a = set(T.series_candidates("SRFL-2026-0901")["series"]["cases"])
-    kinds = {x["kind"]: x for x in ra["actions"]}
-    results.append(check("all seven planted series cases found", set(gt["series"]) <= series_a,
-                          f"{len(set(gt['series']) & series_a)}/7"))
-    results.append(check("decoy rejected", gt["decoy"] not in series_a))
-    results.append(check("2023 elimination reopened",
-                          kinds.get("reopen_decision", {}).get("target") == gt["alibi_decision"]))
-    results.append(check("unaffected CAM-17 decision left standing",
-                          all(x["target"] != gt["unaffected_cam17_decision"] for x in ra["actions"])))
-    retests = [x["target"] for x in ra["actions"] if x["kind"] == "request_retest"]
-    results.append(check("scenario A ends in a re-test", bool(retests), ", ".join(retests)))
 
-    retest_log = [complete_retest(x, str(data_path)) for x in retests]
-    after = set(T.series_candidates("SRFL-2026-0901")["series"]["cases"])
-    results.append(check("false link disproved and excluded later",
-                          gt["false_link_case"] in series_a and gt["false_link_case"] not in after))
-
-    rb = lead.run("scenarios/scenario_b.json", mode)
-    kb = [x["kind"] for x in rb["actions"]]
-    results.append(check("scenario B holds the link instead of re-testing",
-                          "hold_link" in kb and "request_retest" not in kb, ", ".join(kb)))
-    held = T.case_links("SRFL-2026-0902", include_inactive=True)["links"]
-    results.append(check("held link rests on the custody-gap exhibit's case",
-                          any(l["status"] == "held" for l in held)))
-
+@app.post("/demo/run")
+def demo_run(mode: str = "offline"):
+    """Runs both investigable cases back to back and combines their checks
+    (same total as the old /demo/run). Prefer /investigate/a and
+    /investigate/b individually for the dashboard, since those show each run on
+    its own case."""
+    if mode not in ("offline", "claude", "groq"):
+        raise HTTPException(400, "mode must be offline, claude or groq")
+    data_path = Path("data/srfl.json")
+    if not data_path.exists():
+        raise HTTPException(503, "graph not loaded yet")
+    gt = json.load(open(data_path))["ground_truth"]
+    a = _investigate_a(mode, data_path, gt)
+    b = _investigate_b(mode, gt)
     return {
         "mode": mode,
-        "passed": sum(1 for r in results if r["pass"]),
-        "total": len(results),
-        "checks": results,
-        "scenario_a": {"run_id": ra["run_id"], "report": ra["report"], "actions": ra["actions"]},
-        "retest": retest_log,
-        "scenario_b": {"run_id": rb["run_id"], "report": rb["report"], "actions": rb["actions"]},
+        "passed": a["passed"] + b["passed"],
+        "total": a["total"] + b["total"],
+        "checks": a["checks"] + b["checks"],
+        "scenario_a": a,
+        "scenario_b": b,
     }

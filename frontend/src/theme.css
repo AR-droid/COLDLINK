@@ -1,0 +1,37 @@
+:root {
+  --paper: #e9ddc0;
+  --paper-2: #ddd0ab;
+  --paper-3: #d1c296;
+  --ink: #2a2015;
+  --ink-dim: #6b5c3f;
+  --red: #a3262c;
+  --red-dark: #7f1d22;
+  --green: #3d6b3a;
+  --border: #b3a271;
+  --border-dark: #8a7b50;
+  --shadow: rgba(30, 22, 10, 0.35);
+
+  --bg-dark: #19140c;
+  --panel-dark: #241c11;
+
+  --f-display: "Special Elite", "Courier New", monospace;
+  --f-mono: "Courier Prime", "Courier New", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  background: var(--bg-dark);
+  background-image:
+    radial-gradient(ellipse at top, #2a2014 0%, var(--bg-dark) 60%);
+  color: var(--ink);
+  font-family: var(--f-mono);
+}
+
+button {
+  font-family: var(--f-mono);
+}
+
+::selection { background: var(--red); color: var(--paper); }

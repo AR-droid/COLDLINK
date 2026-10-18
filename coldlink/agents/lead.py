@@ -60,6 +60,7 @@ class Toolbox:
         self.fns = {f.__name__: f for f in READ_TOOLS + ACTION_TOOLS}
 
     def call(self, name: str, **args):
+        import time as _time
         self.step += 1
         T.record_step(self.run_id, self.step, name, args, lab=self.lab)
         fn = self.fns[name]
@@ -67,11 +68,15 @@ class Toolbox:
         if "run_id" in fn.__code__.co_varnames:
             kwargs["run_id"] = self.run_id
         kwargs["lab"] = self.lab
+        t0 = _time.monotonic()
         try:
             out = fn(**kwargs)
         except Exception as e:  # surface tool errors to the model rather than crash
             out = {"error": f"{type(e).__name__}: {e}"}
-        self.trace.append({"step": self.step, "tool": name, "args": args, "result": out})
+        elapsed_ms = round((_time.monotonic() - t0) * 1000, 1)
+        kind = "action" if name in {f.__name__ for f in ACTION_TOOLS} else "read"
+        self.trace.append({"step": self.step, "tool": name, "kind": kind, "args": args,
+                            "result": out, "elapsed_ms": elapsed_ms})
         return out
 
 
@@ -333,7 +338,7 @@ def run(scenario_path: str, mode: str = "auto", lab: str = DEFAULT_LAB, ingest: 
     Path(f"runs/{run_id}.md").write_text(report)
     Path(f"runs/{run_id}.trace.json").write_text(json.dumps(tb.trace, indent=1, default=str))
     return {"run_id": run_id, "mode": mode, "case_id": case_id, "report": report, "result": out,
-            "actions": T.action_log(run_id, lab=lab), "steps": tb.step}
+            "actions": T.action_log(run_id, lab=lab), "steps": tb.step, "trace": tb.trace}
 
 
 def main():
